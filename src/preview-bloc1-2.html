@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Macro Tracker — Bloc 1+2 Preview</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+    body { font-family: 'DM Sans', sans-serif; margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // === CONSTANTES ===
+    const NIVEAUX_ACTIVITE = [
+      { label: "Sédentaire", coeff: 1.2, description: "Peu ou pas d'exercice" },
+      { label: "Légèrement actif", coeff: 1.375, description: "Exercice léger 1-3j/sem" },
+      { label: "Modérément actif", coeff: 1.55, description: "Exercice modéré 3-5j/sem" },
+      { label: "Très actif", coeff: 1.725, description: "Exercice intense 6-7j/sem" },
+      { label: "Extrêmement actif", coeff: 1.9, description: "Travail physique + sport" },
+    ];
+    const OBJECTIFS = [
+      { label: "Perte de poids", ajustement: -400 },
+      { label: "Maintien", ajustement: 0 },
+      { label: "Prise de masse", ajustement: 300 },
+      { label: "Recomposition corporelle", ajustement: -150 },
+    ];
+    const REGIMES = ["Végétalien", "Végétarien", "Omnivore", "Autre"];
+    const PROFIL_DEFAUT = { poids: 70, taille: 175, age: 30, sexe: "Homme", activite: 2, objectif: 1, regime: 0 };
+    const REPAS_DEFAUT = [
+      { id: "petit-dejeuner", nom: "Petit-déjeuner" },
+      { id: "dejeuner", nom: "Déjeuner" },
+      { id: "diner", nom: "Dîner" },
+      { id: "collation", nom: "Collation" },
+    ];
+    const FOODS_DB = [
+      { id: "tofu-ferme", nom: "Tofu ferme", categorie: "Protéines végétales", pour100g: { calories: 144, proteines: 17.3, glucides: 3.9, lipides: 8.7, fibres: 2.3 } },
+      { id: "flocons-avoine", nom: "Flocons d'avoine", categorie: "Céréales et féculents", pour100g: { calories: 379, proteines: 13.2, glucides: 66.0, lipides: 6.7, fibres: 10.1 } },
+      { id: "lentilles-corail", nom: "Lentilles corail (cuites)", categorie: "Protéines végétales", pour100g: { calories: 116, proteines: 9.0, glucides: 20.1, lipides: 0.4, fibres: 3.8 } },
+      { id: "riz-complet-cuit", nom: "Riz complet (cuit)", categorie: "Céréales et féculents", pour100g: { calories: 123, proteines: 2.7, glucides: 25.6, lipides: 0.9, fibres: 1.6 } },
+      { id: "banane", nom: "Banane", categorie: "Fruits et légumes", pour100g: { calories: 89, proteines: 1.1, glucides: 22.8, lipides: 0.3, fibres: 2.6 } },
+    ];
+
+    // === FONCTIONS UTILITAIRES ===
+    function dateAujourdhui() { return new Date().toISOString().slice(0, 10); }
+    let compteurId = 0;
+    function genererIdUnique() { compteurId++; return `item-${Date.now()}-${compteurId}`; }
+
+    function calculerMacrosAliment(aliment, quantiteG) {
+      const r = quantiteG / 100;
+      return {
+        calories: Math.round(aliment.pour100g.calories * r),
+        proteines: +(aliment.pour100g.proteines * r).toFixed(1),
+        glucides: +(aliment.pour100g.glucides * r).toFixed(1),
+        lipides: +(aliment.pour100g.lipides * r).toFixed(1),
+        fibres: +(aliment.pour100g.fibres * r).toFixed(1),
+      };
+    }
+
+    function calculerTotaux(items) {
+      return items.reduce((acc, item) => ({
+        calories: acc.calories + item.macros.calories,
+        proteines: +(acc.proteines + item.macros.proteines).toFixed(1),
+        glucides: +(acc.glucides + item.macros.glucides).toFixed(1),
+        lipides: +(acc.lipides + item.macros.lipides).toFixed(1),
+      }), { calories: 0, proteines: 0, glucides: 0, lipides: 0 });
+    }
+
+    function calculerMB(p, t, a, s) { const b = 10*p + 6.25*t - 5*a; return s === "Homme" ? b+5 : b-161; }
+    function calculerTDEE(mb, i) { return mb * NIVEAUX_ACTIVITE[i].coeff; }
+    function calculerCaloriesCibles(tdee, i) { return tdee + OBJECTIFS[i].ajustement; }
+
+    // === COMPOSANT : Recherche avec autocomplétion ===
+    function RechercheAliment({ onSelect }) {
+      const [recherche, setRecherche] = useState("");
+      const [resultats, setResultats] = useState([]);
+      const [ouvert, setOuvert] = useState(false);
+      const refC = useRef(null);
+
+      useEffect(() => {
+        if (recherche.length < 1) { setResultats([]); setOuvert(false); return; }
+        const t = recherche.toLowerCase();
+        const f = FOODS_DB.filter(a => a.nom.toLowerCase().includes(t) || a.categorie.toLowerCase().includes(t)).slice(0, 8);
+        setResultats(f);
+        setOuvert(f.length > 0);
+      }, [recherche]);
+
+      useEffect(() => {
+        function h(e) { if (refC.current && !refC.current.contains(e.target)) setOuvert(false); }
+        document.addEventListener("mousedown", h);
+        return () => document.removeEventListener("mousedown", h);
+      }, []);
+
+      function sel(a) { onSelect(a); setRecherche(""); setOuvert(false); }
+
+      return (
+        <div ref={refC} className="relative">
+          <input type="text" placeholder="Rechercher un aliment..." value={recherche}
+            onChange={e => setRecherche(e.target.value)}
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent" />
+          {ouvert && (
+            <ul className="absolute z-10 w-full mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+              {resultats.map(a => (
+                <li key={a.id} onClick={() => sel(a)} className="px-3 py-2 cursor-pointer hover:bg-emerald-50 transition-colors">
+                  <span className="text-sm font-medium text-stone-700">{a.nom}</span>
+                  <span className="text-xs text-stone-400 ml-2">{a.pour100g.calories} kcal/100g</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      );
+    }
+
+    // === COMPOSANT : Section d'un repas ===
+    function SectionRepas({ repas, items, onAjouterAliment, onSupprimerAliment, onModifierQuantite }) {
+      const [deplie, setDeplie] = useState(true);
+      const totaux = calculerTotaux(items);
+
+      return (
+        <section className="bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden">
+          <button onClick={() => setDeplie(!deplie)}
+            className="w-full flex items-center justify-between p-4 hover:bg-stone-50 transition-colors">
+            <div className="flex items-center gap-3">
+              <span className={`text-stone-400 transition-transform ${deplie ? "rotate-90" : ""}`}>▶</span>
+              <h3 className="font-semibold text-stone-700">{repas.nom}</h3>
+              {items.length > 0 && (
+                <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                  {items.length} aliment{items.length > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+            {items.length > 0 && <span className="text-sm font-medium text-stone-500">{totaux.calories} kcal</span>}
+          </button>
+
+          {deplie && (
+            <div className="px-4 pb-4 space-y-3">
+              <RechercheAliment onSelect={a => onAjouterAliment(repas.id, a)} />
+              {items.length === 0 ? (
+                <p className="text-sm text-stone-400 text-center py-3">Aucun aliment ajouté. Utilise la recherche ci-dessus.</p>
+              ) : (
+                <div className="space-y-2">
+                  {items.map(item => (
+                    <div key={item.uid} className="flex items-center gap-2 p-3 bg-stone-50 rounded-xl">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-stone-700 truncate">{item.nom}</p>
+                        <p className="text-xs text-stone-400">
+                          {item.macros.calories} kcal · P {item.macros.proteines}g · G {item.macros.glucides}g · L {item.macros.lipides}g
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <input type="number" min={1} value={item.quantite}
+                          onChange={e => onModifierQuantite(repas.id, item.uid, Number(e.target.value))}
+                          className="w-16 text-center text-sm rounded-lg border border-stone-300 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                        <span className="text-xs text-stone-400">g</span>
+                      </div>
+                      <button onClick={() => onSupprimerAliment(repas.id, item.uid)}
+                        className="text-stone-400 hover:text-red-500 transition-colors p-1" title="Supprimer">✕</button>
+                    </div>
+                  ))}
+                  <div className="flex justify-end gap-4 pt-2 border-t border-stone-100 text-xs text-stone-500">
+                    <span>P {totaux.proteines}g</span>
+                    <span>G {totaux.glucides}g</span>
+                    <span>L {totaux.lipides}g</span>
+                    <span className="font-semibold text-stone-700">{totaux.calories} kcal</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      );
+    }
+
+    // === COMPOSANT : Profil ===
+    function ProfileForm({ profil, majProfil, mb, tdee, caloriesCibles }) {
+      const ic = "w-full rounded-lg border border-stone-300 px-3 py-2 text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent";
+      const sc = ic + " bg-white";
+      return (
+        <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+          <h2 className="text-lg font-semibold text-stone-700 mb-4">Mon profil</h2>
+          <div className="space-y-4">
+            <div><label htmlFor="poids" className="block text-sm font-medium text-stone-600 mb-1">Poids (kg)</label>
+              <input id="poids" type="number" min={30} max={250} value={profil.poids} onChange={e => majProfil("poids", Number(e.target.value))} className={ic} /></div>
+            <div><label htmlFor="taille" className="block text-sm font-medium text-stone-600 mb-1">Taille (cm)</label>
+              <input id="taille" type="number" min={100} max={250} value={profil.taille} onChange={e => majProfil("taille", Number(e.target.value))} className={ic} /></div>
+            <div><label htmlFor="age" className="block text-sm font-medium text-stone-600 mb-1">Âge (années)</label>
+              <input id="age" type="number" min={14} max={100} value={profil.age} onChange={e => majProfil("age", Number(e.target.value))} className={ic} /></div>
+            <div><label htmlFor="sexe" className="block text-sm font-medium text-stone-600 mb-1">Sexe biologique</label>
+              <select id="sexe" value={profil.sexe} onChange={e => majProfil("sexe", e.target.value)} className={sc}>
+                <option value="Homme">Homme</option><option value="Femme">Femme</option></select></div>
+            <div><label htmlFor="activite" className="block text-sm font-medium text-stone-600 mb-1">Niveau d'activité</label>
+              <select id="activite" value={profil.activite} onChange={e => majProfil("activite", Number(e.target.value))} className={sc}>
+                {NIVEAUX_ACTIVITE.map((n,i) => <option key={i} value={i}>{n.label} — {n.description}</option>)}</select></div>
+            <div><label htmlFor="objectif" className="block text-sm font-medium text-stone-600 mb-1">Objectif</label>
+              <select id="objectif" value={profil.objectif} onChange={e => majProfil("objectif", Number(e.target.value))} className={sc}>
+                {OBJECTIFS.map((o,i) => <option key={i} value={i}>{o.label} ({o.ajustement > 0 ? "+" : ""}{o.ajustement} kcal)</option>)}</select></div>
+            <div><label htmlFor="regime" className="block text-sm font-medium text-stone-600 mb-1">Régime alimentaire</label>
+              <select id="regime" value={profil.regime} onChange={e => majProfil("regime", Number(e.target.value))} className={sc}>
+                {REGIMES.map((r,i) => <option key={i} value={i}>{r}</option>)}</select></div>
+          </div>
+          <div className="mt-6 pt-4 border-t border-stone-100 space-y-3">
+            <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide">Tes besoins estimés</h3>
+            <div className="flex justify-between items-center py-2 border-b border-stone-100">
+              <div><p className="text-sm font-medium text-stone-600">Métabolisme de base</p><p className="text-xs text-stone-400">Énergie au repos</p></div>
+              <span className="text-lg font-bold text-stone-800">{mb} kcal</span></div>
+            <div className="flex justify-between items-center py-2 border-b border-stone-100">
+              <div><p className="text-sm font-medium text-stone-600">Dépense totale (TDEE)</p><p className="text-xs text-stone-400">MB × {NIVEAUX_ACTIVITE[profil.activite].coeff}</p></div>
+              <span className="text-lg font-bold text-stone-800">{tdee} kcal</span></div>
+            <div className="flex justify-between items-center py-2">
+              <div><p className="text-sm font-medium text-emerald-700">Objectif calorique</p><p className="text-xs text-stone-400">{OBJECTIFS[profil.objectif].label}</p></div>
+              <span className="text-xl font-bold text-emerald-700">{caloriesCibles} kcal</span></div>
+          </div>
+        </section>
+      );
+    }
+
+    // === APP PRINCIPAL ===
+    function App() {
+      const [page, setPage] = useState("journal");
+
+      // Bloc 1 : Profil
+      const [profil, setProfil] = useState(() => {
+        try { const s = localStorage.getItem("profile"); if (s) return JSON.parse(s); } catch(e) {}
+        return PROFIL_DEFAUT;
+      });
+      const [mb, setMB] = useState(0);
+      const [tdee, setTDEE] = useState(0);
+      const [caloriesCibles, setCaloriesCibles] = useState(0);
+
+      useEffect(() => {
+        const m = calculerMB(profil.poids, profil.taille, profil.age, profil.sexe);
+        const t = calculerTDEE(m, profil.activite);
+        const c = calculerCaloriesCibles(t, profil.objectif);
+        setMB(Math.round(m)); setTDEE(Math.round(t)); setCaloriesCibles(Math.round(c));
+      }, [profil]);
+
+      useEffect(() => {
+        try { localStorage.setItem("profile", JSON.stringify(profil)); } catch(e) {}
+      }, [profil]);
+
+      function majProfil(ch, val) { setProfil({...profil, [ch]: val}); }
+
+      // Bloc 2 : Journal
+      const [journal, setJournal] = useState(() => {
+        try { const s = localStorage.getItem(`journal:${dateAujourdhui()}`); if (s) return JSON.parse(s); } catch(e) {}
+        const v = {}; REPAS_DEFAUT.forEach(r => { v[r.id] = []; }); return v;
+      });
+
+      useEffect(() => {
+        try { localStorage.setItem(`journal:${dateAujourdhui()}`, JSON.stringify(journal)); } catch(e) {}
+      }, [journal]);
+
+      function ajouterAliment(repasId, aliment) {
+        const q = 100;
+        const item = { uid: genererIdUnique(), alimentId: aliment.id, nom: aliment.nom, quantite: q, macros: calculerMacrosAliment(aliment, q), aliment };
+        setJournal({...journal, [repasId]: [...journal[repasId], item]});
+      }
+      function supprimerAliment(repasId, uid) {
+        setJournal({...journal, [repasId]: journal[repasId].filter(i => i.uid !== uid)});
+      }
+      function modifierQuantite(repasId, uid, nq) {
+        if (nq < 1) return;
+        setJournal({...journal, [repasId]: journal[repasId].map(i =>
+          i.uid === uid ? {...i, quantite: nq, macros: calculerMacrosAliment(i.aliment, nq)} : i
+        )});
+      }
+
+      const tousItems = Object.values(journal).flat();
+      const totalJour = calculerTotaux(tousItems);
+
+      return (
+        <div className="min-h-screen bg-stone-50 text-stone-800">
+          <header className="bg-emerald-700 text-white py-4 px-4 sticky top-0 z-20 shadow-md">
+            <div className="max-w-xl mx-auto flex items-center justify-between">
+              <div>
+                <h1 className="text-xl font-bold tracking-tight">Macro Tracker Végétal</h1>
+                <p className="text-emerald-200 text-xs">Suivi nutritionnel bienveillant</p>
+              </div>
+              <nav className="flex gap-1">
+                <button onClick={() => setPage("journal")}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${page === "journal" ? "bg-white/20 text-white" : "text-emerald-200 hover:text-white hover:bg-white/10"}`}>Journal</button>
+                <button onClick={() => setPage("profil")}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${page === "profil" ? "bg-white/20 text-white" : "text-emerald-200 hover:text-white hover:bg-white/10"}`}>Profil</button>
+              </nav>
+            </div>
+          </header>
+
+          <main className="max-w-xl mx-auto p-4 space-y-4">
+            {page === "journal" && (
+              <>
+                <section className="bg-emerald-700 text-white rounded-2xl p-4 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <h2 className="text-sm font-semibold text-emerald-100">Aujourd'hui</h2>
+                    <span className="text-xs text-emerald-200">{dateAujourdhui()}</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2 text-center">
+                    <div><p className="text-2xl font-bold">{totalJour.calories}</p><p className="text-xs text-emerald-200">/ {caloriesCibles} kcal</p></div>
+                    <div><p className="text-lg font-bold">{totalJour.proteines}g</p><p className="text-xs text-emerald-200">Protéines</p></div>
+                    <div><p className="text-lg font-bold">{totalJour.glucides}g</p><p className="text-xs text-emerald-200">Glucides</p></div>
+                    <div><p className="text-lg font-bold">{totalJour.lipides}g</p><p className="text-xs text-emerald-200">Lipides</p></div>
+                  </div>
+                  <div className="mt-3 bg-emerald-800 rounded-full h-2 overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${Math.min((totalJour.calories / caloriesCibles) * 100, 100)}%`,
+                        backgroundColor: totalJour.calories / caloriesCibles > 1 ? "#ef4444"
+                          : totalJour.calories / caloriesCibles > 0.85 ? "#f59e0b" : "#34d399",
+                      }} />
+                  </div>
+                </section>
+
+                {REPAS_DEFAUT.map(repas => (
+                  <SectionRepas key={repas.id} repas={repas} items={journal[repas.id] || []}
+                    onAjouterAliment={ajouterAliment} onSupprimerAliment={supprimerAliment}
+                    onModifierQuantite={modifierQuantite} />
+                ))}
+              </>
+            )}
+
+            {page === "profil" && (
+              <ProfileForm profil={profil} majProfil={majProfil} mb={mb} tdee={tdee} caloriesCibles={caloriesCibles} />
+            )}
+
+            <p className="text-xs text-stone-400 text-center pb-4">Macro Tracker Végétal — Calculs basés sur Mifflin-St Jeor</p>
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cal(cul)ories</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+    body { font-family: 'DM Sans', sans-serif; margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const { PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } = Recharts;
+
+    // === CONSTANTES ===
+    const NIVEAUX_ACTIVITE = [
+      { label: "Sédentaire", coeff: 1.2, description: "Peu ou pas d'exercice" },
+      { label: "Légèrement actif", coeff: 1.375, description: "Exercice léger 1-3j/sem" },
+      { label: "Modérément actif", coeff: 1.55, description: "Exercice modéré 3-5j/sem" },
+      { label: "Très actif", coeff: 1.725, description: "Exercice intense 6-7j/sem" },
+      { label: "Extrêmement actif", coeff: 1.9, description: "Travail physique + sport" },
+    ];
+    const OBJECTIFS = [
+      { label: "Perte de poids", ajustement: -400 },
+      { label: "Maintien", ajustement: 0 },
+      { label: "Prise de masse", ajustement: 300 },
+      { label: "Recomposition corporelle", ajustement: -150 },
+    ];
+    const REGIMES = ["Végétalien", "Végétarien", "Omnivore", "Autre"];
+    const PROFIL_DEFAUT = { poids: 70, taille: 175, age: 30, sexe: "Homme", activite: 2, objectif: 1, regime: 0 };
+    const MACROS_DEFAUT = { glucides: 45, proteines: 25, lipides: 30 };
+    const SEUIL_ORANGE = 0.85;
+    // REPAS_DEFAUT : conservé pour usage futur (quand on ajoutera le suivi journalier)
+    // Pour l'instant le Journal sert uniquement à construire la base d'aliments.
+    const REPAS_DEFAUT = [
+      { id: "petit-dejeuner", nom: "Petit-déjeuner" },
+      { id: "dejeuner", nom: "Déjeuner" },
+      { id: "diner", nom: "Dîner" },
+      { id: "collation", nom: "Collation" },
+    ];
+    // Base d'aliments : vide au départ, tu la construis toi-même via le Journal !
+    // Les aliments ajoutés manuellement sont sauvegardés dans localStorage (clé "food-db-custom").
+    const FOODS_DB = [];
+    const COULEURS_MACROS = { proteines: "#10b981", glucides: "#f59e0b", lipides: "#6366f1" };
+
+    // === FONCTIONS UTILITAIRES ===
+
+    // normaliserNom : transforme un nom d'aliment pour faciliter la comparaison.
+    // - met en minuscules
+    // - supprime les accents (é→e, è→e, etc.) via normalize("NFD") + regex
+    // - supprime les espaces en trop et trim
+    // Comme ça "Tofu Ferme", "tofu ferme", "tofü fermé" matchent tous.
+    function normaliserNom(nom) {
+      return nom
+        .toLowerCase()
+        .normalize("NFD")                     // décompose les accents (é → e + ´)
+        .replace(/[\u0300-\u036f]/g, "")      // supprime les marques d'accent
+        .replace(/\s+/g, " ")                 // remplace espaces multiples par un seul
+        .trim();
+    }
+
+    // chercherAlimentDansBase : cherche un aliment par nom normalisé dans un tableau.
+    // Retourne l'aliment trouvé ou undefined.
+    // Essaie d'abord une correspondance exacte, puis vérifie si un nom contient l'autre.
+    function chercherAlimentDansBase(nomRecherche, listeAliments) {
+      const nomNorm = normaliserNom(nomRecherche);
+      // 1) Correspondance exacte (après normalisation)
+      const exact = listeAliments.find(f => normaliserNom(f.nom) === nomNorm);
+      if (exact) return exact;
+      // 2) Correspondance partielle : "tofu" matche "tofu ferme" ou inversement
+      // On prend le match le plus court (le plus spécifique)
+      const partiels = listeAliments.filter(f => {
+        const nf = normaliserNom(f.nom);
+        return nf.includes(nomNorm) || nomNorm.includes(nf);
+      });
+      if (partiels.length === 1) return partiels[0];
+      // Si plusieurs matchs partiels, on prend celui dont le nom normalisé est le plus proche en longueur
+      if (partiels.length > 1) {
+        partiels.sort((a, b) => Math.abs(normaliserNom(a.nom).length - nomNorm.length) - Math.abs(normaliserNom(b.nom).length - nomNorm.length));
+        return partiels[0];
+      }
+      return undefined;
+    }
+
+    function dateAujourdhui() { return new Date().toISOString().slice(0, 10); }
+    function dateIlYA(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+    function jourCourt(ds) { return ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"][new Date(ds+"T12:00:00").getDay()]; }
+    let compteurId = 0;
+    function genererIdUnique() { compteurId++; return `item-${Date.now()}-${compteurId}`; }
+    function calculerMacrosAliment(a, q) {
+      const r = q / 100;
+      return { calories: Math.round(a.pour100g.calories*r), proteines: +(a.pour100g.proteines*r).toFixed(1),
+        glucides: +(a.pour100g.glucides*r).toFixed(1), lipides: +(a.pour100g.lipides*r).toFixed(1), fibres: +(a.pour100g.fibres*r).toFixed(1) };
+    }
+    function calculerTotaux(items) {
+      return items.reduce((acc, i) => ({ calories: acc.calories+i.macros.calories, proteines: +(acc.proteines+i.macros.proteines).toFixed(1),
+        glucides: +(acc.glucides+i.macros.glucides).toFixed(1), lipides: +(acc.lipides+i.macros.lipides).toFixed(1) }),
+        { calories:0, proteines:0, glucides:0, lipides:0 });
+    }
+    function calculerObjectifsMacros(cal, rep) {
+      return { proteines: Math.round((cal*rep.proteines/100)/4), glucides: Math.round((cal*rep.glucides/100)/4), lipides: Math.round((cal*rep.lipides/100)/9) };
+    }
+    function couleurProgression(r) { if (r>1) return "#ef4444"; if (r>SEUIL_ORANGE) return "#f59e0b"; return "#10b981"; }
+
+    // === CLÉ API CLAUDE ===
+    // La clé API est maintenant côté SERVEUR (dans api/analyze.js).
+    // Le frontend n'y a plus accès — c'est le backend qui fait relais.
+    // En mode local (fichier ouvert directement), on garde une clé en fallback.
+    // En production (Vercel), cette variable sera vide et le backend prendra le relais.
+    const CLAUDE_API_KEY = "";
+
+    // === PROMPT SYSTÈME POUR CLAUDE ===
+    // Ce prompt force Claude à répondre UNIQUEMENT en JSON structuré.
+    // On lui donne la liste des aliments connus pour qu'il réutilise les mêmes noms.
+    function creerPromptSysteme(alimentsConnus) {
+      // On construit une liste détaillée des aliments connus AVEC leurs macros
+      // pour que Claude les réutilise telles quelles au lieu d'inventer des valeurs
+      const listeDetaillee = alimentsConnus.map(a =>
+        `- "${a.nom}": ${a.pour100g.calories} kcal, P ${a.pour100g.proteines}g, G ${a.pour100g.glucides}g, L ${a.pour100g.lipides}g, F ${a.pour100g.fibres}g`
+      ).join("\n");
+
+      return `Tu es un assistant nutritionnel spécialisé dans l'alimentation végétalienne.
+L'utilisateur te décrit ce qu'il a mangé en langage naturel.
+Tu dois répondre UNIQUEMENT avec un JSON valide (pas de texte avant ou après).
+
+Format de réponse OBLIGATOIRE :
+{
+  "repas": "petit-dejeuner" | "dejeuner" | "diner" | "collation",
+  "aliments": [
+    {
+      "nom": "Nom de l'aliment",
+      "quantite_g": 150,
+      "pour100g": {
+        "calories": 100,
+        "proteines": 5.0,
+        "glucides": 20.0,
+        "lipides": 2.0,
+        "fibres": 3.0
+      }
+    }
+  ]
+}
+
+Règles :
+- Déduis le type de repas depuis le contexte (matin = petit-dejeuner, midi = dejeuner, soir = diner, sinon = collation).
+- Si l'utilisateur précise le repas, utilise-le.
+- Estime les quantités en grammes si l'utilisateur dit "un bol", "une portion", etc.
+- Les macros doivent être pour 100g de l'aliment (pas pour la quantité consommée).
+- PRIORITÉ ABSOLUE : si un aliment correspond à un aliment de la base ci-dessous, utilise EXACTEMENT le même nom et les MÊMES macros pour 100g. Ne modifie pas les valeurs.
+- Pour les aliments INCONNUS (pas dans la base), estime des valeurs nutritionnelles réalistes.
+- Si l'utilisateur mentionne plusieurs aliments, mets-les tous dans le tableau "aliments".
+- Réponds UNIQUEMENT avec le JSON, rien d'autre.
+
+Aliments déjà dans la base (utilise ces valeurs exactes) :
+${listeDetaillee || "Aucun aliment enregistré pour le moment."}`;
+    }
+
+    // === FONCTION : Appel API Claude ===
+    // async/await : permet d'attendre la réponse du serveur sans bloquer l'interface
+    // fetch() : fonction native du navigateur pour faire des requêtes HTTP
+    //
+    // ARCHITECTURE :
+    // En production (Vercel) → appelle /api/analyze (notre backend, clé secrète côté serveur)
+    // En local (fichier ouvert directement) → appelle l'API Anthropic directement (fallback)
+    async function appelerClaudeAPI(texteUtilisateur, alimentsConnus) {
+      const systemPrompt = creerPromptSysteme(alimentsConnus);
+      let data;
+
+      // Détection : sommes-nous en production (serveur) ou en local (file://) ?
+      // window.location.protocol === "file:" signifie qu'on ouvre le HTML directement
+      const enLocal = window.location.protocol === "file:";
+
+      if (enLocal && CLAUDE_API_KEY) {
+        // --- MODE LOCAL : appel direct à l'API Anthropic (pour le dev) ---
+        const reponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": CLAUDE_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true"
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: [{ role: "user", content: texteUtilisateur }]
+          })
+        });
+        if (!reponse.ok) {
+          const erreur = await reponse.text();
+          throw new Error(`Erreur API (${reponse.status}): ${erreur}`);
+        }
+        data = await reponse.json();
+      } else {
+        // --- MODE PRODUCTION : appel à notre backend /api/analyze ---
+        // Le backend fait relais vers Claude avec la clé secrète
+        const reponse = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ texte: texteUtilisateur, systemPrompt })
+        });
+        if (!reponse.ok) {
+          const erreur = await reponse.json().catch(() => ({ error: "Erreur inconnue" }));
+          throw new Error(erreur.error || `Erreur serveur (${reponse.status})`);
+        }
+        data = await reponse.json();
+      }
+
+      // La réponse de Claude est dans data.content[0].text
+      const texteJSON = data.content[0].text;
+
+      // On parse le JSON retourné par Claude
+      // JSON.parse() transforme une chaîne de caractères en objet JavaScript
+      try {
+        return JSON.parse(texteJSON);
+      } catch (e) {
+        // Parfois Claude ajoute du texte autour du JSON, on essaie d'extraire le JSON
+        const match = texteJSON.match(/\{[\s\S]*\}/);
+        if (match) return JSON.parse(match[0]);
+        throw new Error("Réponse invalide de l'API : " + texteJSON.slice(0, 200));
+      }
+    }
+    function chargerTotauxJour(ds) {
+      try { const s = localStorage.getItem(`journal:${ds}`); if (s) { const j = JSON.parse(s); return calculerTotaux(Object.values(j).flat()); } } catch(e) {}
+      return { calories:0, proteines:0, glucides:0, lipides:0 };
+    }
+    function calculerMB(p,t,a,s) { const b = 10*p+6.25*t-5*a; return s==="Homme"?b+5:b-161; }
+    function calculerTDEE(mb,i) { return mb*NIVEAUX_ACTIVITE[i].coeff; }
+    function calculerCaloriesCibles(tdee,i) { return tdee+OBJECTIFS[i].ajustement; }
+
+    // === FONCTIONS : Semaine (lundi → dimanche) ===
+    // Retourne la date du lundi de la semaine contenant la date donnée.
+    // getDay() retourne 0=Dimanche, 1=Lundi, ..., 6=Samedi
+    // On décale pour que Lundi = jour 0 de la semaine.
+    function lundiDeLaSemaine(dateStr) {
+      const d = new Date(dateStr + "T12:00:00");
+      const jour = d.getDay(); // 0=Dim, 1=Lun, ...
+      const decalage = jour === 0 ? 6 : jour - 1; // Dim → 6, Lun → 0, Mar → 1, ...
+      d.setDate(d.getDate() - decalage);
+      return d.toISOString().slice(0, 10);
+    }
+
+    // Retourne un tableau de 7 dates (lundi à dimanche) pour la semaine contenant dateStr
+    function joursDeLaSemaine(dateStr) {
+      const lundi = lundiDeLaSemaine(dateStr);
+      const jours = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(lundi + "T12:00:00");
+        d.setDate(d.getDate() + i);
+        jours.push(d.toISOString().slice(0, 10));
+      }
+      return jours;
+    }
+
+    const JOURS_SEMAINE_COURTS = ["L", "M", "M", "J", "V", "S", "D"];
+
+    // === COMPOSANT : Objectifs journaliers avec tracker semaine ===
+    // Ce composant gère :
+    // 1. Une liste d'objectifs personnalisés que l'utilisateur peut ajouter/supprimer
+    // 2. Des cases à cocher pour valider chaque objectif chaque jour
+    // 3. Un tracker visuel sur la semaine (lundi→dimanche) : vert = réussi, rouge = raté
+    // 4. Reset automatique chaque lundi (nouvelle semaine = nouvelles cases)
+    //
+    // Structure localStorage :
+    // - "objectifs-liste" : tableau des objectifs [{id, texte}]
+    // - "objectifs-semaine:YYYY-MM-DD" : { objectifId: { "YYYY-MM-DD": true/false, ... } }
+    //   (la clé est la date du lundi de la semaine)
+    function ObjectifsJournaliers() {
+      // --- State : liste des objectifs ---
+      const [objectifs, setObjectifs] = useState(() => {
+        try { const s = localStorage.getItem("objectifs-liste"); if (s) return JSON.parse(s); } catch(e) {}
+        return [];
+      });
+
+      // --- State : résultats de la semaine en cours ---
+      // Structure : { objectifId: { "2026-03-10": true, "2026-03-11": false, ... } }
+      const lundiCourant = lundiDeLaSemaine(dateAujourdhui());
+      const [resultats, setResultats] = useState(() => {
+        try { const s = localStorage.getItem("objectifs-semaine:" + lundiCourant); if (s) return JSON.parse(s); } catch(e) {}
+        return {};
+      });
+
+      // --- State : champ texte pour ajouter un objectif ---
+      const [nouveauTexte, setNouveauTexte] = useState("");
+      // --- State : mode édition (pour afficher/masquer les boutons supprimer) ---
+      const [modeEdition, setModeEdition] = useState(false);
+
+      // Sauvegarde automatique
+      useEffect(() => { try { localStorage.setItem("objectifs-liste", JSON.stringify(objectifs)); } catch(e) {} }, [objectifs]);
+      useEffect(() => { try { localStorage.setItem("objectifs-semaine:" + lundiCourant, JSON.stringify(resultats)); } catch(e) {} }, [resultats]);
+
+      // --- Les 7 jours de la semaine courante ---
+      const joursSemaine = joursDeLaSemaine(dateAujourdhui());
+      const aujourdhui = dateAujourdhui();
+
+      // --- Ajouter un objectif ---
+      function ajouterObjectif(e) {
+        e.preventDefault();
+        if (!nouveauTexte.trim()) return;
+        const nouvel = { id: "obj-" + Date.now(), texte: nouveauTexte.trim() };
+        setObjectifs([...objectifs, nouvel]);
+        setNouveauTexte("");
+      }
+
+      // --- Supprimer un objectif ---
+      function supprimerObjectif(id) {
+        setObjectifs(objectifs.filter(o => o.id !== id));
+        // On supprime aussi ses résultats
+        setResultats(prev => {
+          const copie = { ...prev };
+          delete copie[id];
+          return copie;
+        });
+      }
+
+      // --- Cocher/décocher un objectif pour aujourd'hui ---
+      function toggleObjectif(objectifId) {
+        setResultats(prev => {
+          const copie = { ...prev };
+          if (!copie[objectifId]) copie[objectifId] = {};
+          // Toggle : si déjà true → false, si false/undefined → true
+          copie[objectifId][aujourdhui] = !copie[objectifId][aujourdhui];
+          return copie;
+        });
+      }
+
+      // --- Vérifier si un objectif est coché pour un jour donné ---
+      function estCoche(objectifId, dateStr) {
+        return resultats[objectifId] && resultats[objectifId][dateStr] === true;
+      }
+
+      // --- Calculer le statut d'un jour pour le tracker global ---
+      // Un jour est "réussi" si TOUS les objectifs sont cochés ce jour-là
+      // Un jour est "raté" si au moins un objectif n'est pas coché ET le jour est passé
+      // Un jour futur ou aujourd'hui sans données reste neutre (blanc)
+      function statutJour(dateStr) {
+        if (objectifs.length === 0) return "neutre";
+        if (dateStr > aujourdhui) return "futur";
+        const tousCoches = objectifs.every(o => estCoche(o.id, dateStr));
+        if (tousCoches) return "reussi";
+        // Si c'est aujourd'hui et pas encore tout coché, c'est "en cours"
+        if (dateStr === aujourdhui) return "en-cours";
+        // Jour passé et pas tout coché = raté
+        return "rate";
+      }
+
+      // --- Couleur d'une case du tracker ---
+      function couleurCase(statut) {
+        if (statut === "reussi") return "bg-emerald-500";
+        if (statut === "rate") return "bg-red-400";
+        if (statut === "en-cours") return "bg-amber-300";
+        if (statut === "futur") return "bg-stone-100";
+        return "bg-stone-100";
+      }
+
+      return (
+        <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide">Objectifs du jour</h3>
+            {objectifs.length > 0 && (
+              <button
+                onClick={() => setModeEdition(!modeEdition)}
+                className="text-xs text-stone-400 hover:text-stone-600 transition-colors"
+              >
+                {modeEdition ? "Terminé" : "Modifier"}
+              </button>
+            )}
+          </div>
+
+          {/* Liste des objectifs avec checkbox */}
+          {objectifs.length > 0 ? (
+            <div className="space-y-2 mb-4">
+              {objectifs.map(obj => (
+                <div key={obj.id} className="flex items-center gap-3 group">
+                  {/* Checkbox custom */}
+                  <button
+                    onClick={() => toggleObjectif(obj.id)}
+                    className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all ${
+                      estCoche(obj.id, aujourdhui)
+                        ? "bg-emerald-500 border-emerald-500 text-white"
+                        : "border-stone-300 hover:border-emerald-400"
+                    }`}
+                  >
+                    {estCoche(obj.id, aujourdhui) && <span className="text-xs">&#10003;</span>}
+                  </button>
+                  <span className={`text-sm flex-1 ${
+                    estCoche(obj.id, aujourdhui) ? "text-stone-400 line-through" : "text-stone-700"
+                  }`}>
+                    {obj.texte}
+                  </span>
+                  {/* Bouton supprimer (visible en mode édition) */}
+                  {modeEdition && (
+                    <button
+                      onClick={() => supprimerObjectif(obj.id)}
+                      className="text-stone-300 hover:text-red-500 transition-colors text-sm"
+                    >&#10005;</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-stone-400 mb-4">Aucun objectif. Ajoute-en un ci-dessous !</p>
+          )}
+
+          {/* Formulaire d'ajout */}
+          <form onSubmit={ajouterObjectif} className="flex gap-2 mb-5">
+            <input
+              type="text"
+              value={nouveauTexte}
+              onChange={e => setNouveauTexte(e.target.value)}
+              placeholder="Ex: Pas de sucre ajouté"
+              className="flex-1 rounded-lg border border-stone-300 px-3 py-1.5 text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+            />
+            <button
+              type="submit"
+              disabled={!nouveauTexte.trim()}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                nouveauTexte.trim()
+                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                  : "bg-stone-200 text-stone-400 cursor-not-allowed"
+              }`}
+            >+</button>
+          </form>
+
+          {/* Tracker semaine : 7 cases lundi → dimanche */}
+          {objectifs.length > 0 && (
+            <div>
+              <p className="text-xs text-stone-400 mb-2">Semaine du {new Date(lundiCourant + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}</p>
+              <div className="flex gap-1.5">
+                {joursSemaine.map((jour, i) => {
+                  const statut = statutJour(jour);
+                  return (
+                    <div key={jour} className="flex-1 flex flex-col items-center gap-1">
+                      <span className="text-xs text-stone-400">{JOURS_SEMAINE_COURTS[i]}</span>
+                      <div className={`w-full aspect-square rounded-lg ${couleurCase(statut)} transition-colors ${
+                        jour === aujourdhui ? "ring-2 ring-emerald-500 ring-offset-1" : ""
+                      }`} />
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Légende */}
+              <div className="flex gap-3 mt-2 justify-center text-xs text-stone-400">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-emerald-500"/> Réussi</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-400"/> Raté</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-amber-300"/> En cours</span>
+              </div>
+            </div>
+          )}
+        </section>
+      );
+    }
+
+    // === COMPOSANT : Barre circulaire SVG ===
+    function BarreCirculaire({ label, valeur, objectif, unite, couleur }) {
+      const ratio = objectif > 0 ? valeur / objectif : 0;
+      const pct = Math.round(ratio * 100);
+      const couleurArc = couleur || couleurProgression(ratio);
+      const sz=90, r=35, ep=6, c=sz/2, perim=2*Math.PI*r;
+      const off = perim - perim*Math.min(ratio,1);
+      return (
+        <div className="flex flex-col items-center">
+          <svg width={sz} height={sz} className="transform -rotate-90">
+            <circle cx={c} cy={c} r={r} fill="none" stroke="#e7e5e4" strokeWidth={ep}/>
+            <circle cx={c} cy={c} r={r} fill="none" stroke={couleurArc} strokeWidth={ep}
+              strokeLinecap="round" strokeDasharray={perim} strokeDashoffset={off} className="transition-all duration-500"/>
+          </svg>
+          <div className="relative -mt-16 mb-4 text-center">
+            <p className="text-lg font-bold text-stone-800">{pct}%</p>
+            <p className="text-xs text-stone-500">{valeur}/{objectif}{unite}</p>
+          </div>
+          <p className="text-xs font-medium text-stone-600">{label}</p>
+        </div>
+      );
+    }
+
+    // === COMPOSANT : Dashboard ===
+    function Dashboard({ totalJour, caloriesCibles, objectifsMacros, journal }) {
+      const totalMG = totalJour.proteines + totalJour.glucides + totalJour.lipides;
+      const donutData = totalMG > 0
+        ? [{ name:"Protéines", value:totalJour.proteines, color:COULEURS_MACROS.proteines },
+           { name:"Glucides", value:totalJour.glucides, color:COULEURS_MACROS.glucides },
+           { name:"Lipides", value:totalJour.lipides, color:COULEURS_MACROS.lipides }]
+        : [{ name:"Vide", value:1, color:"#d6d3d1" }];
+
+      const d7 = [];
+      for (let i=6;i>=0;i--) { const ds=dateIlYA(i); const t=i===0?totalJour:chargerTotauxJour(ds); d7.push({jour:jourCourt(ds),calories:t.calories}); }
+
+      const calRestantes = Math.max(0, caloriesCibles - totalJour.calories);
+      const deficits = [
+        { nom:"protéines", restant:Math.max(0,objectifsMacros.proteines-totalJour.proteines) },
+        { nom:"glucides", restant:Math.max(0,objectifsMacros.glucides-totalJour.glucides) },
+        { nom:"lipides", restant:Math.max(0,objectifsMacros.lipides-totalJour.lipides) },
+      ].sort((a,b)=>b.restant-a.restant);
+      const aDesAliments = Object.values(journal).flat().length > 0;
+
+      return (
+        <div className="space-y-4">
+          <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+            <h2 className="text-lg font-semibold text-stone-700 mb-4">Progression du jour</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <BarreCirculaire label="Calories" valeur={totalJour.calories} objectif={caloriesCibles} unite=" kcal"/>
+              <BarreCirculaire label="Protéines" valeur={totalJour.proteines} objectif={objectifsMacros.proteines} unite="g" couleur={COULEURS_MACROS.proteines}/>
+              <BarreCirculaire label="Glucides" valeur={totalJour.glucides} objectif={objectifsMacros.glucides} unite="g" couleur={COULEURS_MACROS.glucides}/>
+              <BarreCirculaire label="Lipides" valeur={totalJour.lipides} objectif={objectifsMacros.lipides} unite="g" couleur={COULEURS_MACROS.lipides}/>
+            </div>
+          </section>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+              <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide mb-3">Répartition macros</h3>
+              <div className="flex justify-center">
+                <ResponsiveContainer width="100%" height={160}>
+                  <PieChart>
+                    <Pie data={donutData} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={65} paddingAngle={2} strokeWidth={0}>
+                      {donutData.map((d,i) => <Cell key={i} fill={d.color}/>)}
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              {totalMG > 0 && (
+                <div className="flex justify-center gap-4 mt-2 text-xs">
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:COULEURS_MACROS.proteines}}/> P {Math.round(totalJour.proteines/totalMG*100)}%</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:COULEURS_MACROS.glucides}}/> G {Math.round(totalJour.glucides/totalMG*100)}%</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:COULEURS_MACROS.lipides}}/> L {Math.round(totalJour.lipides/totalMG*100)}%</span>
+                </div>
+              )}
+            </section>
+
+            <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+              <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide mb-3">Résumé</h3>
+              <div className="space-y-4">
+                <div><p className="text-3xl font-bold text-emerald-700">{calRestantes}</p><p className="text-sm text-stone-500">kcal restantes</p></div>
+                {aDesAliments && deficits[0].restant > 0 && (
+                  <div className="bg-stone-50 rounded-xl p-3">
+                    <p className="text-sm text-stone-600">Il te reste <span className="font-semibold">{Math.round(deficits[0].restant)}g de {deficits[0].nom}</span> à atteindre</p>
+                  </div>
+                )}
+                {!aDesAliments && (
+                  <div className="bg-stone-50 rounded-xl p-3"><p className="text-sm text-stone-400">Ajoute des aliments dans le journal pour voir ton résumé ici.</p></div>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+            <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide mb-3">Tendance 7 jours — Calories</h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={d7} margin={{top:5,right:10,bottom:5,left:-10}}>
+                <XAxis dataKey="jour" tick={{fontSize:12,fill:"#78716c"}}/>
+                <YAxis tick={{fontSize:11,fill:"#a8a29e"}}/>
+                <Tooltip formatter={v=>[`${v} kcal`,"Calories"]} contentStyle={{borderRadius:"8px",border:"1px solid #e7e5e4",fontSize:"13px"}}/>
+                <ReferenceLine y={caloriesCibles} stroke="#10b981" strokeDasharray="6 4"/>
+                <Line type="monotone" dataKey="calories" stroke="#059669" strokeWidth={2} dot={{fill:"#059669",r:4}} activeDot={{r:6}}/>
+              </LineChart>
+            </ResponsiveContainer>
+          </section>
+
+          {/* Objectifs journaliers + tracker semaine */}
+          <ObjectifsJournaliers />
+        </div>
+      );
+    }
+
+    // === COMPOSANT : Recherche aliment ===
+    // Amélioré : cherche dans FOODS_DB + customFoods (aliments créés manuellement)
+    function RechercheAliment({ onSelect, customFoods }) {
+      const [recherche, setRecherche] = useState("");
+      const [resultats, setResultats] = useState([]);
+      const [ouvert, setOuvert] = useState(false);
+      const refC = useRef(null);
+      useEffect(() => {
+        if (recherche.length<1) { setResultats([]); setOuvert(false); return; }
+        const t = recherche.toLowerCase();
+        // On fusionne FOODS_DB (les aliments de base) avec customFoods (les aliments ajoutés manuellement)
+        // .concat() crée un nouveau tableau avec les éléments des deux tableaux
+        const tousLesAliments = FOODS_DB.concat(customFoods || []);
+        const f = tousLesAliments.filter(a=>a.nom.toLowerCase().includes(t)||(a.categorie && a.categorie.toLowerCase().includes(t))).slice(0,8);
+        setResultats(f); setOuvert(f.length>0);
+      }, [recherche, customFoods]);
+      useEffect(() => {
+        function h(e) { if (refC.current && !refC.current.contains(e.target)) setOuvert(false); }
+        document.addEventListener("mousedown", h); return ()=>document.removeEventListener("mousedown", h);
+      }, []);
+      function sel(a) { onSelect(a); setRecherche(""); setOuvert(false); }
+      return (
+        <div ref={refC} className="relative">
+          <input type="text" placeholder="Rechercher un aliment..." value={recherche} onChange={e=>setRecherche(e.target.value)}
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"/>
+          {ouvert && (
+            <ul className="absolute z-10 w-full mt-1 bg-white border border-stone-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+              {resultats.map(a=>(
+                <li key={a.id} onClick={()=>sel(a)} className="px-3 py-2 cursor-pointer hover:bg-emerald-50 transition-colors">
+                  <span className="text-sm font-medium text-stone-700">{a.nom}</span>
+                  {/* On affiche un badge "Perso" pour les aliments custom, pour les distinguer */}
+                  {a.custom && <span className="text-xs bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded ml-2">Perso</span>}
+                  <span className="text-xs text-stone-400 ml-2">{a.pour100g.calories} kcal/100g</span>
+                </li>))}
+            </ul>)}
+        </div>
+      );
+    }
+
+    // === COMPOSANT : Formulaire d'ajout manuel d'aliment ===
+    // Ce composant permet de créer un aliment en saisissant ses macros pour 100g.
+    // L'aliment est sauvegardé dans customFoods (localStorage clé "food-db-custom").
+    // Le formulaire reste visible après soumission et se vide pour un nouvel ajout.
+    function FormulaireAlimentManuel({ onAjouterCustom }) {
+      const [nom, setNom] = useState("");
+      const [calories, setCalories] = useState("");
+      const [proteines, setProteines] = useState("");
+      const [glucides, setGlucides] = useState("");
+      const [lipides, setLipides] = useState("");
+      const [fibres, setFibres] = useState("");
+      // State pour afficher un message de confirmation temporaire
+      const [confirmation, setConfirmation] = useState(false);
+
+      function soumettreFormulaire(e) {
+        e.preventDefault();
+        if (!nom.trim()) return;
+
+        const nouvelAliment = {
+          id: "custom-" + Date.now(),
+          nom: nom.trim(),
+          categorie: "Aliment personnalisé",
+          custom: true,
+          pour100g: {
+            calories: Math.round(parseFloat(calories) || 0),
+            proteines: +(parseFloat(proteines) || 0).toFixed(1),
+            glucides: +(parseFloat(glucides) || 0).toFixed(1),
+            lipides: +(parseFloat(lipides) || 0).toFixed(1),
+            fibres: +(parseFloat(fibres) || 0).toFixed(1),
+          }
+        };
+
+        onAjouterCustom(nouvelAliment);
+
+        // On vide le formulaire pour un nouvel ajout
+        setNom(""); setCalories(""); setProteines(""); setGlucides(""); setLipides(""); setFibres("");
+
+        // Message de confirmation qui disparaît après 2 secondes
+        setConfirmation(true);
+        setTimeout(() => setConfirmation(false), 2000);
+      }
+
+      const ic = "w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent";
+
+      return (
+        <form onSubmit={soumettreFormulaire} className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6 space-y-3">
+          <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide">Ajouter un aliment</h3>
+
+          <div>
+            <input type="text" placeholder="Nom de l'aliment *" value={nom} onChange={e=>setNom(e.target.value)}
+              className={ic} required />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-xs text-stone-500 mb-0.5">Calories (kcal)</label>
+              <input type="number" min={0} step="any" placeholder="0" value={calories} onChange={e=>setCalories(e.target.value)} className={ic}/>
+            </div>
+            <div>
+              <label className="block text-xs text-stone-500 mb-0.5">Protéines (g)</label>
+              <input type="number" min={0} step="any" placeholder="0" value={proteines} onChange={e=>setProteines(e.target.value)} className={ic}/>
+            </div>
+            <div>
+              <label className="block text-xs text-stone-500 mb-0.5">Glucides (g)</label>
+              <input type="number" min={0} step="any" placeholder="0" value={glucides} onChange={e=>setGlucides(e.target.value)} className={ic}/>
+            </div>
+            <div>
+              <label className="block text-xs text-stone-500 mb-0.5">Lipides (g)</label>
+              <input type="number" min={0} step="any" placeholder="0" value={lipides} onChange={e=>setLipides(e.target.value)} className={ic}/>
+            </div>
+            <div>
+              <label className="block text-xs text-stone-500 mb-0.5">Fibres (g)</label>
+              <input type="number" min={0} step="any" placeholder="0" value={fibres} onChange={e=>setFibres(e.target.value)} className={ic}/>
+            </div>
+          </div>
+
+          <button type="submit"
+            className="w-full bg-emerald-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">
+            Ajouter à ma base
+          </button>
+
+          {/* Message de confirmation temporaire */}
+          {confirmation && (
+            <p className="text-sm text-emerald-600 text-center font-medium">Aliment ajouté !</p>
+          )}
+        </form>
+      );
+    }
+
+    // === COMPOSANT : Section repas ===
+    // Amélioré : ajout d'un bouton bascule pour passer de la recherche à l'ajout manuel
+    function SectionRepas({ repas, items, onAjouterAliment, onSupprimerAliment, onModifierQuantite, onAjouterAlimentCustom, customFoods }) {
+      const [deplie, setDeplie] = useState(true);
+      // Nouveau state : "mode" contrôle quel formulaire est visible (recherche ou manuel)
+      const [mode, setMode] = useState("recherche"); // "recherche" ou "manuel"
+      const totaux = calculerTotaux(items);
+      return (
+        <section className="bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden">
+          <button onClick={()=>setDeplie(!deplie)} className="w-full flex items-center justify-between p-4 hover:bg-stone-50 transition-colors">
+            <div className="flex items-center gap-3">
+              <span className={`text-stone-400 transition-transform ${deplie?"rotate-90":""}`}>▶</span>
+              <h3 className="font-semibold text-stone-700">{repas.nom}</h3>
+              {items.length>0 && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{items.length} aliment{items.length>1?"s":""}</span>}
+            </div>
+            {items.length>0 && <span className="text-sm font-medium text-stone-500">{totaux.calories} kcal</span>}
+          </button>
+          {deplie && (
+            <div className="px-4 pb-4 space-y-3">
+              {/* Bascule Recherche / Ajout manuel */}
+              <div className="flex gap-2">
+                <button onClick={()=>setMode("recherche")}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    mode==="recherche" ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-500 hover:bg-stone-200"}`}>
+                  🔍 Rechercher
+                </button>
+                <button onClick={()=>setMode("manuel")}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    mode==="manuel" ? "bg-violet-100 text-violet-700" : "bg-stone-100 text-stone-500 hover:bg-stone-200"}`}>
+                  ✏️ Ajout manuel
+                </button>
+              </div>
+
+              {/* Affichage conditionnel selon le mode choisi */}
+              {mode==="recherche" && <RechercheAliment onSelect={a=>onAjouterAliment(repas.id,a)} customFoods={customFoods}/>}
+              {mode==="manuel" && <FormulaireAlimentManuel
+                onAjouterCustom={aliment => onAjouterAlimentCustom(repas.id, aliment)}
+                onFermer={()=>setMode("recherche")} />}
+
+              {items.length===0 ? (
+                <p className="text-sm text-stone-400 text-center py-3">Aucun aliment ajouté.</p>
+              ) : (
+                <div className="space-y-2">
+                  {items.map(item=>(
+                    <div key={item.uid} className="flex items-center gap-2 p-3 bg-stone-50 rounded-xl">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-stone-700 truncate">
+                          {item.nom}
+                          {/* Badge "Perso" sur les aliments dans la liste aussi */}
+                          {item.aliment && item.aliment.custom && <span className="text-xs bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded ml-2">Perso</span>}
+                        </p>
+                        <p className="text-xs text-stone-400">{item.macros.calories} kcal · P {item.macros.proteines}g · G {item.macros.glucides}g · L {item.macros.lipides}g</p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <input type="number" min={1} value={item.quantite} onChange={e=>onModifierQuantite(repas.id,item.uid,Number(e.target.value))}
+                          className="w-16 text-center text-sm rounded-lg border border-stone-300 py-1 focus:outline-none focus:ring-2 focus:ring-emerald-500"/>
+                        <span className="text-xs text-stone-400">g</span>
+                      </div>
+                      <button onClick={()=>onSupprimerAliment(repas.id,item.uid)} className="text-stone-400 hover:text-red-500 transition-colors p-1">✕</button>
+                    </div>))}
+                  <div className="flex justify-end gap-4 pt-2 border-t border-stone-100 text-xs text-stone-500">
+                    <span>P {totaux.proteines}g</span><span>G {totaux.glucides}g</span><span>L {totaux.lipides}g</span>
+                    <span className="font-semibold text-stone-700">{totaux.calories} kcal</span>
+                  </div>
+                </div>)}
+            </div>)}
+        </section>
+      );
+    }
+
+    // === COMPOSANT : Journal de saisie (nouveau bloc) ===
+    // Ce composant permet de décrire ses repas en langage naturel (texte ou vocal).
+    // L'API Claude analyse le texte et retourne les aliments structurés avec leurs macros.
+    // Les nouveaux aliments sont automatiquement ajoutés à la base customFoods.
+    function JournalSaisie({ journal, setJournal, customFoods, onAjouterCustom, caloriesCibles, objectifsMacros, dateJournal, onValider, onJourPrecedent }) {
+      const [texte, setTexte] = useState("");
+      const [chargement, setChargement] = useState(false);
+      const [erreur, setErreur] = useState("");
+      const [confirmation, setConfirmation] = useState("");
+      // État pour la reconnaissance vocale
+      const [enEcoute, setEnEcoute] = useState(false);
+      // useRef pour garder une référence à l'objet SpeechRecognition entre les rendus
+      const reconnaissanceRef = useRef(null);
+      const champTexteRef = useRef(null);
+
+      // --- Web Speech API : reconnaissance vocale ---
+      // On vérifie si le navigateur supporte l'API (Chrome principalement)
+      const speechDisponible = typeof window !== "undefined" &&
+        (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+      function demarrerVocal() {
+        if (!speechDisponible) {
+          setErreur("La reconnaissance vocale n'est pas supportée par ton navigateur. Utilise Chrome.");
+          return;
+        }
+        // On crée une instance de SpeechRecognition
+        // webkit prefix pour Chrome
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const reco = new SpeechRecognition();
+        reco.lang = "fr-FR";          // Langue française
+        reco.continuous = false;        // S'arrête après une phrase
+        reco.interimResults = true;     // Affiche le texte en cours de dictée
+
+        reco.onresult = (event) => {
+          // event.results contient les résultats de la reconnaissance
+          // Le dernier résultat est le plus complet
+          let transcription = "";
+          for (let i = 0; i < event.results.length; i++) {
+            transcription += event.results[i][0].transcript;
+          }
+          setTexte(transcription);
+        };
+
+        reco.onend = () => {
+          setEnEcoute(false);
+        };
+
+        reco.onerror = (event) => {
+          setEnEcoute(false);
+          if (event.error === "no-speech") {
+            setErreur("Aucune parole détectée. Réessaie en parlant plus fort.");
+          } else if (event.error === "not-allowed") {
+            setErreur("Accès au micro refusé. Autorise-le dans les paramètres du navigateur.");
+          }
+        };
+
+        reconnaissanceRef.current = reco;
+        reco.start();
+        setEnEcoute(true);
+        setErreur("");
+      }
+
+      function arreterVocal() {
+        if (reconnaissanceRef.current) {
+          reconnaissanceRef.current.stop();
+          setEnEcoute(false);
+        }
+      }
+
+      // --- Envoi du texte à l'API Claude ---
+      async function analyserTexte() {
+        if (!texte.trim()) return;
+        setChargement(true);
+        setErreur("");
+        setConfirmation("");
+
+        try {
+          // On fusionne FOODS_DB et customFoods pour donner le contexte à Claude
+          const tousAliments = FOODS_DB.concat(customFoods || []);
+          const resultat = await appelerClaudeAPI(texte, tousAliments);
+
+          // Validation : on vérifie que le JSON a le bon format
+          if (!resultat.repas || !Array.isArray(resultat.aliments)) {
+            throw new Error("Format de réponse inattendu");
+          }
+
+          // --- CORRESPONDANCE LOCALE ---
+          // Pour chaque aliment retourné par l'API, on cherche s'il existe déjà dans la base.
+          // Si oui, on utilise les macros de LA BASE (pas celles de l'API) → plus fiable et cohérent.
+          // chercherAlimentDansBase() normalise les noms (accents, casse, espaces) pour matcher
+          // même si Claude retourne un nom légèrement différent.
+          const nouvellesEntrees = resultat.aliments.map(a => {
+            const alimentConnu = chercherAlimentDansBase(a.nom, tousAliments);
+            // Si l'aliment est dans la base, on prend SES macros ; sinon celles de l'API
+            const macros100g = alimentConnu ? alimentConnu.pour100g : a.pour100g;
+            const nomFinal = alimentConnu ? alimentConnu.nom : a.nom;
+
+            return {
+              uid: genererIdUnique(),
+              nom: nomFinal,
+              quantite: a.quantite_g,
+              aliment: alimentConnu || {
+                id: "api-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
+                nom: nomFinal,
+                categorie: "Via API",
+                custom: true,
+                pour100g: macros100g
+              },
+              macros: calculerMacrosAliment({ pour100g: macros100g }, a.quantite_g)
+            };
+          });
+
+          // On ajoute les entrées au bon repas dans le journal
+          // Le spread operator (...) copie le journal existant avant de le modifier
+          const repasId = resultat.repas;
+          setJournal(prev => {
+            const nvJournal = { ...prev };
+            // Si le repas n'existe pas encore dans le journal, on le crée
+            if (!nvJournal[repasId]) nvJournal[repasId] = [];
+            // .concat() ajoute les nouvelles entrées à la fin du tableau existant
+            nvJournal[repasId] = nvJournal[repasId].concat(nouvellesEntrees);
+            return nvJournal;
+          });
+
+          // Auto-ajout des nouveaux aliments à la base customFoods
+          // On vérifie pour chaque aliment s'il existe déjà (recherche normalisée)
+          resultat.aliments.forEach(a => {
+            const existe = chercherAlimentDansBase(a.nom, customFoods);
+            if (!existe) {
+              onAjouterCustom({
+                id: "api-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6),
+                nom: a.nom,
+                categorie: "Via API",
+                custom: true,
+                pour100g: a.pour100g
+              });
+            }
+          });
+
+          // Confirmation et reset
+          const nbAliments = resultat.aliments.length;
+          const nomRepas = REPAS_DEFAUT.find(r => r.id === repasId)?.nom || repasId;
+          setConfirmation(`${nbAliments} aliment${nbAliments > 1 ? "s" : ""} ajouté${nbAliments > 1 ? "s" : ""} au ${nomRepas} !`);
+          setTexte("");
+          setTimeout(() => setConfirmation(""), 4000);
+
+        } catch (e) {
+          console.error("Erreur analyse:", e);
+          setErreur(e.message || "Une erreur est survenue lors de l'analyse.");
+        } finally {
+          setChargement(false);
+        }
+      }
+
+      // Gestion du raccourci clavier : Entrée pour envoyer (Shift+Entrée pour saut de ligne)
+      function gererTouche(e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          analyserTexte();
+        }
+      }
+
+      // --- Calcul des totaux du jour pour l'affichage ---
+      const totalJour = calculerTotaux(Object.values(journal).flat());
+
+      // --- Rendu du composant ---
+      return (
+        <div className="space-y-4">
+          {/* En-tête avec date, navigation et résumé rapide */}
+          <section className="bg-emerald-700 text-white rounded-2xl p-4 shadow-sm">
+            {/* Ligne date avec boutons précédent / suivant */}
+            <div className="flex items-center justify-between mb-2">
+              <button onClick={onJourPrecedent}
+                className="px-2 py-1 rounded-lg text-emerald-200 hover:text-white hover:bg-white/10 transition-colors text-lg">
+                ←
+              </button>
+              <div className="text-center">
+                <h2 className="text-lg font-bold">
+                  {dateJournal === dateAujourdhui() ? "Aujourd'hui" :
+                   new Date(dateJournal + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
+                </h2>
+                <p className="text-emerald-200 text-xs">{dateJournal}</p>
+              </div>
+              {/* Bouton suivant : désactivé si on est déjà sur aujourd'hui */}
+              <button onClick={onValider}
+                disabled={dateJournal >= dateAujourdhui()}
+                className={`px-2 py-1 rounded-lg text-lg transition-colors ${
+                  dateJournal >= dateAujourdhui()
+                    ? "text-emerald-400/30 cursor-not-allowed"
+                    : "text-emerald-200 hover:text-white hover:bg-white/10"
+                }`}>
+                →
+              </button>
+            </div>
+            <p className="text-emerald-200 text-sm text-center">Décris ce que tu as mangé, je m'occupe du reste</p>
+            <div className="flex justify-center gap-4 mt-3 text-sm">
+              <span>{totalJour.calories} / {caloriesCibles} kcal</span>
+              <span>P {totalJour.proteines}g</span>
+              <span>G {totalJour.glucides}g</span>
+              <span>L {totalJour.lipides}g</span>
+            </div>
+          </section>
+
+          {/* Zone de saisie texte + bouton micro */}
+          <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-4 space-y-3">
+            <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide">Que viens-tu de manger ?</h3>
+
+            <div className="relative">
+              {/* textarea : champ de texte multiligne */}
+              <textarea
+                ref={champTexteRef}
+                value={texte}
+                onChange={e => setTexte(e.target.value)}
+                onKeyDown={gererTouche}
+                placeholder={"Ex: Ce midi j'ai mangé 200g de riz complet avec 150g de tofu grillé et une salade verte"}
+                rows={3}
+                className="w-full rounded-lg border border-stone-300 px-3 py-2 pr-12 text-sm text-stone-800 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                disabled={chargement}
+              />
+              {/* Bouton micro (en haut à droite du textarea) */}
+              {speechDisponible && (
+                <button
+                  onClick={enEcoute ? arreterVocal : demarrerVocal}
+                  disabled={chargement}
+                  className={`absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                    enEcoute
+                      ? "bg-red-500 text-white animate-pulse"
+                      : "bg-stone-100 text-stone-500 hover:bg-emerald-100 hover:text-emerald-600"
+                  }`}
+                  title={enEcoute ? "Arrêter l'écoute" : "Dicter (vocal)"}
+                >
+                  {enEcoute ? "⏹" : "🎤"}
+                </button>
+              )}
+            </div>
+
+            {/* Indice vocal */}
+            {enEcoute && (
+              <p className="text-xs text-red-500 animate-pulse">Écoute en cours... Parle maintenant !</p>
+            )}
+
+            {/* Bouton d'envoi */}
+            <button
+              onClick={analyserTexte}
+              disabled={chargement || !texte.trim()}
+              className={`w-full py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                chargement || !texte.trim()
+                  ? "bg-stone-200 text-stone-400 cursor-not-allowed"
+                  : "bg-emerald-600 text-white hover:bg-emerald-700"
+              }`}
+            >
+              {chargement ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                  Analyse en cours...
+                </span>
+              ) : "Analyser et ajouter"}
+            </button>
+
+            {/* Messages d'erreur et confirmation */}
+            {erreur && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <p className="text-sm text-red-600">{erreur}</p>
+              </div>
+            )}
+            {confirmation && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                <p className="text-sm text-emerald-600 font-medium">{confirmation}</p>
+              </div>
+            )}
+          </section>
+
+          {/* Affichage structuré des repas du jour */}
+          {REPAS_DEFAUT.map(repas => {
+            const items = journal[repas.id] || [];
+            if (items.length === 0) return null; // On n'affiche pas les repas vides
+
+            const totaux = calculerTotaux(items);
+            return (
+              <section key={repas.id} className="bg-white rounded-2xl shadow-sm border border-stone-200 overflow-hidden">
+                <div className="flex items-center justify-between p-4 bg-stone-50 border-b border-stone-100">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-stone-700">{repas.nom}</h3>
+                    <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                      {items.length} aliment{items.length > 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  <span className="text-sm font-medium text-stone-500">{totaux.calories} kcal</span>
+                </div>
+                <div className="p-4 space-y-2">
+                  {items.map(item => (
+                    <div key={item.uid} className="flex items-center gap-2 p-3 bg-stone-50 rounded-xl">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-stone-700 truncate">{item.nom}</p>
+                        <p className="text-xs text-stone-400">
+                          {item.quantite}g — {item.macros.calories} kcal · P {item.macros.proteines}g · G {item.macros.glucides}g · L {item.macros.lipides}g
+                        </p>
+                      </div>
+                      {/* Bouton supprimer un aliment du journal */}
+                      <button
+                        onClick={() => {
+                          setJournal(prev => ({
+                            ...prev,
+                            [repas.id]: prev[repas.id].filter(i => i.uid !== item.uid)
+                          }));
+                        }}
+                        className="text-stone-400 hover:text-red-500 transition-colors p-1"
+                        title="Supprimer"
+                      >✕</button>
+                    </div>
+                  ))}
+                  <div className="flex justify-end gap-4 pt-2 border-t border-stone-100 text-xs text-stone-500">
+                    <span>P {totaux.proteines}g</span>
+                    <span>G {totaux.glucides}g</span>
+                    <span>L {totaux.lipides}g</span>
+                    <span className="font-semibold text-stone-700">{totaux.calories} kcal</span>
+                  </div>
+                </div>
+              </section>
+            );
+          })}
+
+          {/* Message si aucun repas enregistré */}
+          {Object.values(journal).flat().length === 0 && (
+            <div className="text-center py-8">
+              <p className="text-stone-400 text-sm">Aucun repas enregistré aujourd'hui.</p>
+              <p className="text-stone-300 text-xs mt-1">Décris ce que tu as mangé dans la zone ci-dessus !</p>
+            </div>
+          )}
+
+          {/* Bouton Valider la journée — visible seulement s'il y a des aliments */}
+          {Object.values(journal).flat().length > 0 && (
+            <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-4">
+              {/* Résumé avant validation */}
+              <div className="text-center mb-3">
+                <p className="text-sm text-stone-600">
+                  {Object.values(journal).flat().length} aliment{Object.values(journal).flat().length > 1 ? "s" : ""} enregistré{Object.values(journal).flat().length > 1 ? "s" : ""} — <span className="font-semibold">{totalJour.calories} kcal</span>
+                </p>
+              </div>
+              <button
+                onClick={onValider}
+                className="w-full bg-emerald-600 text-white py-3 rounded-xl text-sm font-semibold hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2"
+              >
+                Valider la journée et passer au jour suivant →
+              </button>
+              <p className="text-xs text-stone-400 text-center mt-2">
+                Tes données sont sauvegardées automatiquement
+              </p>
+            </section>
+          )}
+        </div>
+      );
+    }
+
+    // === COMPOSANT : Profil ===
+    function ProfileForm({ profil, majProfil, mb, tdee, caloriesCibles }) {
+      const ic="w-full rounded-lg border border-stone-300 px-3 py-2 text-stone-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent";
+      const sc=ic+" bg-white";
+      return (
+        <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+          <h2 className="text-lg font-semibold text-stone-700 mb-4">Mon profil</h2>
+          <div className="space-y-4">
+            <div><label className="block text-sm font-medium text-stone-600 mb-1">Poids (kg)</label>
+              <input type="number" min={30} max={250} value={profil.poids} onChange={e=>majProfil("poids",Number(e.target.value))} className={ic}/></div>
+            <div><label className="block text-sm font-medium text-stone-600 mb-1">Taille (cm)</label>
+              <input type="number" min={100} max={250} value={profil.taille} onChange={e=>majProfil("taille",Number(e.target.value))} className={ic}/></div>
+            <div><label className="block text-sm font-medium text-stone-600 mb-1">Âge (années)</label>
+              <input type="number" min={14} max={100} value={profil.age} onChange={e=>majProfil("age",Number(e.target.value))} className={ic}/></div>
+            <div><label className="block text-sm font-medium text-stone-600 mb-1">Sexe biologique</label>
+              <select value={profil.sexe} onChange={e=>majProfil("sexe",e.target.value)} className={sc}>
+                <option value="Homme">Homme</option><option value="Femme">Femme</option></select></div>
+            <div><label className="block text-sm font-medium text-stone-600 mb-1">Niveau d'activité</label>
+              <select value={profil.activite} onChange={e=>majProfil("activite",Number(e.target.value))} className={sc}>
+                {NIVEAUX_ACTIVITE.map((n,i)=><option key={i} value={i}>{n.label} — {n.description}</option>)}</select></div>
+            <div><label className="block text-sm font-medium text-stone-600 mb-1">Objectif</label>
+              <select value={profil.objectif} onChange={e=>majProfil("objectif",Number(e.target.value))} className={sc}>
+                {OBJECTIFS.map((o,i)=><option key={i} value={i}>{o.label} ({o.ajustement>0?"+":""}{o.ajustement} kcal)</option>)}</select></div>
+            <div><label className="block text-sm font-medium text-stone-600 mb-1">Régime alimentaire</label>
+              <select value={profil.regime} onChange={e=>majProfil("regime",Number(e.target.value))} className={sc}>
+                {REGIMES.map((r,i)=><option key={i} value={i}>{r}</option>)}</select></div>
+          </div>
+          <div className="mt-6 pt-4 border-t border-stone-100 space-y-3">
+            <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide">Tes besoins estimés</h3>
+            <div className="flex justify-between items-center py-2 border-b border-stone-100">
+              <div><p className="text-sm font-medium text-stone-600">Métabolisme de base</p></div>
+              <span className="text-lg font-bold text-stone-800">{mb} kcal</span></div>
+            <div className="flex justify-between items-center py-2 border-b border-stone-100">
+              <div><p className="text-sm font-medium text-stone-600">Dépense totale (TDEE)</p></div>
+              <span className="text-lg font-bold text-stone-800">{tdee} kcal</span></div>
+            <div className="flex justify-between items-center py-2">
+              <div><p className="text-sm font-medium text-emerald-700">Objectif calorique</p></div>
+              <span className="text-xl font-bold text-emerald-700">{caloriesCibles} kcal</span></div>
+          </div>
+        </section>
+      );
+    }
+
+    // === APP ===
+    function App() {
+      const [page, setPage] = useState("dashboard");
+      const [profil, setProfil] = useState(()=>{ try { const s=localStorage.getItem("profile"); if(s) return JSON.parse(s); } catch(e){} return PROFIL_DEFAUT; });
+      const [mb, setMB] = useState(0);
+      const [tdee, setTDEE] = useState(0);
+      const [caloriesCibles, setCaloriesCibles] = useState(0);
+
+      useEffect(()=>{ const m=calculerMB(profil.poids,profil.taille,profil.age,profil.sexe); const t=calculerTDEE(m,profil.activite);
+        const c=calculerCaloriesCibles(t,profil.objectif); setMB(Math.round(m)); setTDEE(Math.round(t)); setCaloriesCibles(Math.round(c)); }, [profil]);
+      useEffect(()=>{ try{localStorage.setItem("profile",JSON.stringify(profil));}catch(e){} }, [profil]);
+      function majProfil(ch,val) { setProfil({...profil,[ch]:val}); }
+
+      // --- State pour la date du journal ---
+      // dateJournal : la date actuellement affichée dans le Journal (par défaut : aujourd'hui)
+      const [dateJournal, setDateJournal] = useState(dateAujourdhui);
+
+      // --- Journal : chargé en fonction de dateJournal ---
+      // Quand dateJournal change, on charge le journal correspondant depuis localStorage
+      function chargerJournalPourDate(d) {
+        try { const s=localStorage.getItem(`journal:${d}`); if(s) return JSON.parse(s); } catch(e){}
+        const v={}; REPAS_DEFAUT.forEach(r=>{v[r.id]=[];}); return v;
+      }
+      const [journal, setJournal] = useState(()=> chargerJournalPourDate(dateAujourdhui()));
+      // Sauvegarde automatique du journal quand il change
+      useEffect(()=>{ try{localStorage.setItem(`journal:${dateJournal}`,JSON.stringify(journal));}catch(e){} }, [journal, dateJournal]);
+
+      // --- Fonction : Valider la journée et passer au jour suivant ---
+      // "Valider" = sauvegarder le journal actuel (déjà fait via useEffect) et passer à demain
+      function validerEtJourSuivant() {
+        // On calcule la date du lendemain
+        const d = new Date(dateJournal + "T12:00:00");
+        d.setDate(d.getDate() + 1);
+        const nouvDate = d.toISOString().slice(0, 10);
+        // On change la date, ce qui va déclencher le chargement du journal du lendemain
+        setDateJournal(nouvDate);
+        setJournal(chargerJournalPourDate(nouvDate));
+      }
+
+      // --- Fonction : Revenir au jour précédent ---
+      function jourPrecedent() {
+        const d = new Date(dateJournal + "T12:00:00");
+        d.setDate(d.getDate() - 1);
+        const nouvDate = d.toISOString().slice(0, 10);
+        setDateJournal(nouvDate);
+        setJournal(chargerJournalPourDate(nouvDate));
+      }
+
+      // --- NOUVEAU : State pour les aliments personnalisés ---
+      // On charge depuis localStorage au démarrage (même principe que profil et journal)
+      const [customFoods, setCustomFoods] = useState(()=>{
+        try { const s=localStorage.getItem("food-db-custom"); if(s) return JSON.parse(s); } catch(e){}
+        return [];
+      });
+      // Sauvegarde automatique quand customFoods change
+      useEffect(()=>{ try{localStorage.setItem("food-db-custom",JSON.stringify(customFoods));}catch(e){} }, [customFoods]);
+
+      // --- Fonctions de gestion de la base d'aliments ---
+      // Ajouter un aliment custom à la base (vérifie les doublons par nom)
+      function ajouterAlimentCustom(aliment) {
+        const dejaExiste = customFoods.some(f => f.nom.toLowerCase() === aliment.nom.toLowerCase());
+        if (!dejaExiste) {
+          setCustomFoods([...customFoods, aliment]);
+        }
+      }
+      // Supprimer un aliment de la base custom
+      // .filter() crée un nouveau tableau SANS l'élément dont l'id correspond
+      function supprimerAlimentCustom(id) {
+        setCustomFoods(customFoods.filter(f => f.id !== id));
+      }
+
+      const totalJour = calculerTotaux(Object.values(journal).flat());
+      const objectifsMacros = calculerObjectifsMacros(caloriesCibles, MACROS_DEFAUT);
+
+      return (
+        <div className="min-h-screen bg-stone-50 text-stone-800">
+          <header className="bg-emerald-700 text-white py-4 px-4 sticky top-0 z-20 shadow-md">
+            <div className="max-w-xl mx-auto flex items-center justify-between">
+              <div><h1 className="text-xl font-bold tracking-tight">Cal(cul)ories</h1>
+                <p className="text-emerald-200 text-xs">Suivi nutritionnel intelligent</p></div>
+              <nav className="flex gap-1">
+                {[{id:"dashboard",label:"Dashboard"},{id:"saisie",label:"Journal"},{id:"journal",label:"Aliments"},{id:"profil",label:"Profil"}].map(p=>(
+                  <button key={p.id} onClick={()=>setPage(p.id)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${page===p.id?"bg-white/20 text-white":"text-emerald-200 hover:text-white hover:bg-white/10"}`}>{p.label}</button>
+                ))}
+              </nav>
+            </div>
+          </header>
+          <main className="max-w-xl mx-auto p-4 space-y-4">
+            {page==="dashboard" && <Dashboard totalJour={totalJour} caloriesCibles={caloriesCibles} objectifsMacros={objectifsMacros} journal={journal}/>}
+            {page==="saisie" && <JournalSaisie
+              journal={journal} setJournal={setJournal}
+              customFoods={customFoods} onAjouterCustom={ajouterAlimentCustom}
+              caloriesCibles={caloriesCibles} objectifsMacros={objectifsMacros}
+              dateJournal={dateJournal} onValider={validerEtJourSuivant} onJourPrecedent={jourPrecedent}
+            />}
+            {page==="journal" && (<>
+              {/* En-tête : compteur d'aliments dans ta base */}
+              <section className="bg-emerald-700 text-white rounded-2xl p-4 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-bold">Ma base d'aliments</h2>
+                    <p className="text-emerald-200 text-sm">Construis ta base perso, aliment par aliment</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-3xl font-bold">{customFoods.length}</p>
+                    <p className="text-xs text-emerald-200">aliment{customFoods.length > 1 ? "s" : ""}</p>
+                  </div>
+                </div>
+              </section>
+
+              {/* Formulaire d'ajout (toujours visible) */}
+              <FormulaireAlimentManuel onAjouterCustom={ajouterAlimentCustom} />
+
+              {/* Liste des aliments enregistrés */}
+              <section className="bg-white rounded-2xl shadow-sm border border-stone-200 p-6">
+                <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wide mb-3">
+                  Aliments enregistrés
+                </h3>
+                {customFoods.length === 0 ? (
+                  <p className="text-sm text-stone-400 text-center py-6">
+                    Aucun aliment pour l'instant. Utilise le formulaire ci-dessus pour en ajouter !
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {customFoods.map(food => (
+                      <div key={food.id} className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-stone-700 truncate">{food.nom}</p>
+                          <p className="text-xs text-stone-400">
+                            {food.pour100g.calories} kcal · P {food.pour100g.proteines}g · G {food.pour100g.glucides}g · L {food.pour100g.lipides}g · F {food.pour100g.fibres}g
+                          </p>
+                        </div>
+                        <span className="text-xs text-stone-300 hidden sm:block">pour 100g</span>
+                        <button onClick={() => supprimerAlimentCustom(food.id)}
+                          className="text-stone-400 hover:text-red-500 transition-colors p-1" title="Supprimer">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </>)}
+            {page==="profil" && <ProfileForm profil={profil} majProfil={majProfil} mb={mb} tdee={tdee} caloriesCibles={caloriesCibles}/>}
+            <p className="text-xs text-stone-400 text-center pb-4">Cal(cul)ories — Calculs basés sur Mifflin-St Jeor</p>
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

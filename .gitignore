@@ -1,0 +1,12 @@
+# Variables d'environnement (contient la clé API secrète)
+.env
+
+# Node modules
+node_modules/
+
+# Vercel
+.vercel/
+
+# OS
+.DS_Store
+Thumbs.db
