@@ -1798,34 +1798,31 @@ export default function App() {
     <div className="min-h-screen bg-stone-50 text-stone-800">
 
       {/* ---- EN-TÊTE ---- */}
-      <header className="bg-emerald-700 text-white py-4 px-4 sticky top-0 z-20 shadow-md">
-        <div className="max-w-xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">Cal(cul)ories</h1>
-            <p className="text-emerald-200 text-xs">Suivi nutritionnel intelligent</p>
-          </div>
-          <nav className="flex gap-1">
-            {/* On a maintenant 3 onglets */}
-            {[
-              { id: "dashboard", label: "Dashboard" },
-              { id: "saisie", label: "Journal" },
-              { id: "journal", label: "Aliments" },
-              { id: "profil", label: "Profil" },
-            ].map((p) => (
-              <button
-                key={p.id}
-                onClick={() => setPage(p.id)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                  ${page === p.id
-                    ? "bg-white/20 text-white"
-                    : "text-emerald-200 hover:text-white hover:bg-white/10"
-                  }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </nav>
+      <header className="bg-emerald-700 text-white sticky top-0 z-20 shadow-md">
+        <div className="max-w-xl mx-auto pt-4 pb-2 px-4 text-center">
+          <h1 className="text-xl font-bold tracking-tight">Cal(cul)ories</h1>
+          <p className="text-emerald-200 text-xs">Suivi nutritionnel intelligent</p>
         </div>
+        <nav className="max-w-xl mx-auto px-4 pb-3 flex justify-center gap-2">
+          {[
+            { id: "dashboard", label: "Dashboard" },
+            { id: "saisie", label: "Journal" },
+            { id: "journal", label: "Aliments" },
+            { id: "profil", label: "Profil" },
+          ].map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setPage(p.id)}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors
+                ${page === p.id
+                  ? "bg-white text-emerald-700"
+                  : "text-emerald-200 hover:text-white hover:bg-white/10"
+                }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
       <main className="max-w-xl mx-auto p-4 space-y-4">
