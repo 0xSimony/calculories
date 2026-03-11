@@ -19,6 +19,22 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Clé API non configurée côté serveur." });
   }
 
+  // --- DIAGNOSTIC TEMPORAIRE (à supprimer après debug) ---
+  // On affiche les 8 premiers et 4 derniers caractères de la clé
+  // pour vérifier qu'elle est bien lue sans espace ni guillemet parasite
+  const debut = apiKey.slice(0, 8);
+  const fin = apiKey.slice(-4);
+  const longueur = apiKey.length;
+  console.log(`[DEBUG] Clé API: ${debut}...${fin} (longueur: ${longueur})`);
+
+  // Vérifie si la clé contient des espaces ou guillemets parasites
+  if (apiKey !== apiKey.trim() || apiKey.includes('"') || apiKey.includes("'")) {
+    return res.status(500).json({
+      error: "La clé API contient des caractères parasites (espaces ou guillemets). Vérifie la variable d'environnement sur Vercel.",
+      debug: { longueur, debuteParEspace: apiKey !== apiKey.trimStart(), finitParEspace: apiKey !== apiKey.trimEnd() }
+    });
+  }
+
   // --- 3. On récupère les données envoyées par le frontend ---
   const { texte, systemPrompt } = req.body;
   if (!texte || !systemPrompt) {
@@ -47,6 +63,18 @@ export default async function handler(req, res) {
     // --- 5. On gère les erreurs de l'API ---
     if (!response.ok) {
       const erreurTexte = await response.text();
+      // En cas de 401, on ajoute des infos de diagnostic
+      if (response.status === 401) {
+        return res.status(401).json({
+          error: `Erreur API Claude (401): clé rejetée par Anthropic.`,
+          debug: {
+            clé_début: apiKey.slice(0, 8),
+            clé_fin: apiKey.slice(-4),
+            clé_longueur: apiKey.length,
+            réponse_api: erreurTexte
+          }
+        });
+      }
       return res.status(response.status).json({
         error: `Erreur API Claude (${response.status}): ${erreurTexte}`
       });
