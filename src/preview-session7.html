@@ -1,3 +1,27 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cal(cul)ories — Preview Session 7</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+    body { font-family: 'DM Sans', sans-serif; margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const { PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } = Recharts;
+
 // ============================================================
 // Cal(cul)ories — Application principale
 // Stack : React (JSX unique) + Tailwind CSS + Recharts + API Anthropic
@@ -7,18 +31,10 @@
 // BLOC 3 — Dashboard visuel (← on est ici)
 // ============================================================
 
-import { useState, useEffect, useRef } from "react";
-
 // Recharts : librairie de graphiques React.
 // PieChart + Pie + Cell → pour le donut chart de répartition des macros
 // LineChart + Line + XAxis + YAxis + Tooltip + ReferenceLine → pour le graphique 7 jours
 // ResponsiveContainer → pour que les graphiques s'adaptent à la largeur du parent
-import {
-  PieChart, Pie, Cell,
-  LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine,
-  ResponsiveContainer,
-} from "recharts";
-
 // ============================================================
 // CONSTANTES — BLOC 1
 // ============================================================
@@ -198,7 +214,7 @@ function couleurProgression(ratio) {
 // Renvoie les totaux { calories, proteines, glucides, lipides } ou des zéros.
 function chargerTotauxJour(dateStr) {
   try {
-    const s = window.storage?.getItem(`journal:${dateStr}`);
+    const s = localStorage.getItem(`journal:${dateStr}`);
     if (s) {
       const journal = JSON.parse(s);
       const items = Object.values(journal).flat();
@@ -633,14 +649,14 @@ function Dashboard({ totalJour, caloriesCibles, objectifsMacros, journal }) {
 function ObjectifsJournaliers() {
   // Liste des objectifs
   const [objectifs, setObjectifs] = useState(() => {
-    try { const s = window.storage?.getItem("objectifs-liste"); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem("objectifs-liste"); if (s) return JSON.parse(s); } catch (e) {}
     return [];
   });
 
   // Résultats de la semaine en cours
   const lundiCourant = lundiDeLaSemaine(dateAujourdhui());
   const [resultats, setResultats] = useState(() => {
-    try { const s = window.storage?.getItem("objectifs-semaine:" + lundiCourant); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem("objectifs-semaine:" + lundiCourant); if (s) return JSON.parse(s); } catch (e) {}
     return {};
   });
 
@@ -649,10 +665,10 @@ function ObjectifsJournaliers() {
 
   // Sauvegarde automatique
   useEffect(() => {
-    try { window.storage?.setItem("objectifs-liste", JSON.stringify(objectifs)); } catch (e) {}
+    try { localStorage.setItem("objectifs-liste", JSON.stringify(objectifs)); } catch (e) {}
   }, [objectifs]);
   useEffect(() => {
-    try { window.storage?.setItem("objectifs-semaine:" + lundiCourant, JSON.stringify(resultats)); } catch (e) {}
+    try { localStorage.setItem("objectifs-semaine:" + lundiCourant, JSON.stringify(resultats)); } catch (e) {}
   }, [resultats]);
 
   const joursSemaine = joursDeLaSemaine(dateAujourdhui());
@@ -1616,14 +1632,14 @@ function ProfileForm({ profil, majProfil, mb, tdee, caloriesCibles }) {
 // COMPOSANT PRINCIPAL — App
 // ============================================================
 
-export default function App() {
+function App() {
   // --- NAVIGATION ---
   // On ajoute "dashboard" comme page possible.
   const [page, setPage] = useState("dashboard");
 
   // --- STATE BLOC 1 : PROFIL ---
   const [profil, setProfil] = useState(() => {
-    try { const s = window.storage?.getItem("profile"); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem("profile"); if (s) return JSON.parse(s); } catch (e) {}
     return PROFIL_DEFAUT;
   });
 
@@ -1639,7 +1655,7 @@ export default function App() {
   }, [profil]);
 
   useEffect(() => {
-    try { window.storage?.setItem("profile", JSON.stringify(profil)); } catch (e) {}
+    try { localStorage.setItem("profile", JSON.stringify(profil)); } catch (e) {}
   }, [profil]);
 
   function majProfil(champ, valeur) { setProfil({ ...profil, [champ]: valeur }); }
@@ -1652,21 +1668,21 @@ export default function App() {
   // On charge les presets custom depuis localStorage, puis on fusionne avec les pré-définis.
   // Les presets pré-définis sont toujours présents (PRESETS_DEFAUT), les custom s'ajoutent après.
   const [presetsCustom, setPresetsCustom] = useState(() => {
-    try { const s = window.storage?.getItem("presets-custom"); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem("presets-custom"); if (s) return JSON.parse(s); } catch (e) {}
     return [];
   });
   // L'ID du preset actif. Par défaut = le premier preset ("Équilibré").
   const [presetActifId, setPresetActifId] = useState(() => {
-    try { const s = window.storage?.getItem("preset-actif-id"); if (s) return s; } catch (e) {}
+    try { const s = localStorage.getItem("preset-actif-id"); if (s) return s; } catch (e) {}
     return PRESETS_DEFAUT[0].id;
   });
 
   // Sauvegarde automatique des presets custom et du preset actif
   useEffect(() => {
-    try { window.storage?.setItem("presets-custom", JSON.stringify(presetsCustom)); } catch (e) {}
+    try { localStorage.setItem("presets-custom", JSON.stringify(presetsCustom)); } catch (e) {}
   }, [presetsCustom]);
   useEffect(() => {
-    try { window.storage?.setItem("preset-actif-id", presetActifId); } catch (e) {}
+    try { localStorage.setItem("preset-actif-id", presetActifId); } catch (e) {}
   }, [presetActifId]);
 
   // Fusion : pré-définis + personnalisés = tous les presets disponibles
@@ -1687,20 +1703,20 @@ export default function App() {
   // --- STATE : PROFILS SAUVEGARDÉS (MULTI-PROFILS) ---
   // Chaque profil sauvegardé contient : id, nom, profil (données physiques), presetActifId, presetNom
   const [profilsSauvegardes, setProfilsSauvegardes] = useState(() => {
-    try { const s = window.storage?.getItem("profils-sauvegardes"); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem("profils-sauvegardes"); if (s) return JSON.parse(s); } catch (e) {}
     return [];
   });
   // L'ID du profil actif (null si on utilise le profil "courant" non sauvegardé)
   const [profilActifId, setProfilActifId] = useState(() => {
-    try { const s = window.storage?.getItem("profil-actif-id"); if (s) return s; } catch (e) {}
+    try { const s = localStorage.getItem("profil-actif-id"); if (s) return s; } catch (e) {}
     return null;
   });
 
   useEffect(() => {
-    try { window.storage?.setItem("profils-sauvegardes", JSON.stringify(profilsSauvegardes)); } catch (e) {}
+    try { localStorage.setItem("profils-sauvegardes", JSON.stringify(profilsSauvegardes)); } catch (e) {}
   }, [profilsSauvegardes]);
   useEffect(() => {
-    try { window.storage?.setItem("profil-actif-id", profilActifId); } catch (e) {}
+    try { localStorage.setItem("profil-actif-id", profilActifId); } catch (e) {}
   }, [profilActifId]);
 
   // Sauvegarder le profil actuel sous un nom
@@ -1734,7 +1750,7 @@ export default function App() {
   // --- STATE BLOC 2 : JOURNAL ---
   // Le journal est chargé en fonction de dateJournal (pas toujours aujourd'hui)
   function chargerJournalPourDate(d) {
-    try { const s = window.storage?.getItem(`journal:${d}`); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem(`journal:${d}`); if (s) return JSON.parse(s); } catch (e) {}
     const vide = {}; REPAS_DEFAUT.forEach((r) => { vide[r.id] = []; }); return vide;
   }
 
@@ -1742,7 +1758,7 @@ export default function App() {
 
   // Sauvegarde automatique du journal quand il change (liée à dateJournal)
   useEffect(() => {
-    try { window.storage?.setItem(`journal:${dateJournal}`, JSON.stringify(journal)); } catch (e) {}
+    try { localStorage.setItem(`journal:${dateJournal}`, JSON.stringify(journal)); } catch (e) {}
   }, [journal, dateJournal]);
 
   // Valider la journée et passer au jour suivant
@@ -1766,12 +1782,12 @@ export default function App() {
   // --- STATE : ALIMENTS PERSONNALISÉS ---
   // On charge depuis localStorage au démarrage (même principe que profil et journal)
   const [customFoods, setCustomFoods] = useState(() => {
-    try { const s = window.storage?.getItem("food-db-custom"); if (s) return JSON.parse(s); } catch (e) {}
+    try { const s = localStorage.getItem("food-db-custom"); if (s) return JSON.parse(s); } catch (e) {}
     return [];
   });
   // Sauvegarde automatique quand customFoods change
   useEffect(() => {
-    try { window.storage?.setItem("food-db-custom", JSON.stringify(customFoods)); } catch (e) {}
+    try { localStorage.setItem("food-db-custom", JSON.stringify(customFoods)); } catch (e) {}
   }, [customFoods]);
 
   // --- Fonctions de gestion de la base d'aliments ---
@@ -1947,3 +1963,9 @@ export default function App() {
     </div>
   );
 }
+
+
+    ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  </script>
+</body>
+</html>

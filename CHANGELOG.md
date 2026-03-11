@@ -1,5 +1,18 @@
 # Changelog
 
+## Session 7 — 11 mars 2026
+- **Presets macros personnalisés** : 4 presets pré-définis (Équilibré, Sèche, Prise de masse, Keto) + possibilité de créer ses propres presets avec répartition G/P/L personnalisée
+- **Système multi-profils** : sauvegarder plusieurs profils (ex: "Sèche été 2026") avec leurs réglages physiques + preset actif. Charger/switcher/supprimer en un clic
+- **Dashboard dynamique** : les objectifs macros du dashboard s'adaptent automatiquement au preset sélectionné (remplace l'ancien `MACROS_DEFAUT` statique par `presetActif.macros`)
+- **Récap dashboard** : encadré en bas de la page Profil montrant en temps réel les calories cibles, le preset actif et les objectifs macros en grammes
+- **Consolidation de App.jsx** : réintégré dans le fichier unique tous les composants qui étaient uniquement dans le preview (JournalSaisie, ObjectifsJournaliers, appelerClaudeAPI, normaliserNom, chercherAlimentDansBase, fonctions semaine)
+- **Renommage** : l'app s'appelle désormais **Cal(cul)ories** partout (header, footer, commentaires)
+- Créé `preview-session7.html` pour tester tout le code
+- Persistance localStorage : clés `presets-custom`, `preset-actif-id`, `profils-sauvegardes`, `profil-actif-id`, `objectifs-liste`, `objectifs-semaine:YYYY-MM-DD`
+- Nouveaux concepts : spread operator sur tableaux (`[...PRESETS_DEFAUT, ...presetsCustom]`), `Array.find()` avec fallback (`|| tousLesPresets[0]`), validation formulaire en temps réel (total 100%)
+- **IMPORTANT pour la prochaine session** : `App.jsx` contient désormais TOUT le code (Journal IA + Objectifs + Presets + Multi-profils). Ne plus se baser sur `preview-bloc1-2-3.html` qui est une ancienne version.
+- TODO : connecter l'API Claude pour le Journal (actuellement "Failed to fetch" en local — fonctionne via Vercel), gérer l'édition/correction des entrées du journal
+
 ## Session 6 — 10 mars 2026
 - **Nouveau bloc "Journal"** : saisie des repas en langage naturel
 - Zone de texte avec placeholder explicatif et raccourci Entrée pour envoyer
