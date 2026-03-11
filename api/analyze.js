@@ -66,13 +66,7 @@ export default async function handler(req, res) {
       // En cas de 401, on ajoute des infos de diagnostic
       if (response.status === 401) {
         return res.status(401).json({
-          error: `Erreur API Claude (401): clé rejetée par Anthropic.`,
-          debug: {
-            clé_début: apiKey.slice(0, 8),
-            clé_fin: apiKey.slice(-4),
-            clé_longueur: apiKey.length,
-            réponse_api: erreurTexte
-          }
+          error: `Erreur 401 — Clé rejetée. Début: ${apiKey.slice(0, 10)} | Fin: ${apiKey.slice(-6)} | Longueur: ${apiKey.length} | Réponse API: ${erreurTexte.slice(0, 200)}`
         });
       }
       return res.status(response.status).json({
